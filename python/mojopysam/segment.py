@@ -275,12 +275,10 @@ class AlignedSegment:
             return _parse_cigar(self.cigarstring)
         if self._format == "bam":
             begin, count = int(self._row[14]), int(self._row[7])
-            return [
-                (packed & 15, packed >> 4)
-                for (packed,) in struct.iter_unpack(
-                    "<I", self._source[begin : begin + count * 4]
-                )
-            ] or None
+            packed_values = struct.unpack_from(
+                f"<{count}I", self._source, begin
+            )
+            return [(packed & 15, packed >> 4) for packed in packed_values] or None
         return self._values["cigartuples"]
 
     @cigartuples.setter

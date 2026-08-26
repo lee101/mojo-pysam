@@ -113,6 +113,7 @@ class AlignmentFile:
         self._native = None
         self._source = b""
         self._rows = np.empty((0, 0), dtype=np.int64)
+        self._row_buffer = None
         self._format = ""
 
         if hasattr(filename, "read"):
@@ -158,6 +159,8 @@ class AlignmentFile:
             )
             self._rows = scan_sam(raw)
             self._format = "sam"
+        if self._rows.size:
+            self._row_buffer = memoryview(self._rows).cast("B").cast("q")
         self._count = (
             len(self._native_records) if self._format == "cram" else len(self._rows)
         )
@@ -231,8 +234,15 @@ class AlignmentFile:
             for native in self._native_records:
                 yield AlignedSegment.fromstring(native.to_string(), self.header)
         else:
-            for row in self._rows:
-                yield AlignedSegment._from_row(self._source, row, self._format, self.header)
+            row_width = self._rows.shape[1]
+            for index in range(self._count):
+                begin = index * row_width
+                yield AlignedSegment._from_row(
+                    self._source,
+                    self._row_buffer[begin : begin + row_width],
+                    self._format,
+                    self.header,
+                )
 
     def __iter__(self) -> Iterator[AlignedSegment]:
         return self
@@ -244,8 +254,13 @@ class AlignmentFile:
             native = self._native_records[self._cursor]
             record = AlignedSegment.fromstring(native.to_string(), self.header)
         else:
+            row_width = self._rows.shape[1]
+            begin = self._cursor * row_width
             record = AlignedSegment._from_row(
-                self._source, self._rows[self._cursor], self._format, self.header
+                self._source,
+                self._row_buffer[begin : begin + row_width],
+                self._format,
+                self.header,
             )
         self._cursor += 1
         return record

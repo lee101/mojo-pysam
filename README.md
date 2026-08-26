@@ -92,17 +92,22 @@ mojo-pysam time, so values above 1 are faster.
 
 | Case | mojo-pysam | pysam | Ratio | Result |
 |---|---:|---:|---:|---|
-| SAM parse + fields, 100k | 567.15 ms | 162.22 ms | 0.29x | slower |
-| BAM parse + fields, 100k | 418.82 ms | 115.60 ms | 0.28x | slower |
-| CIGAR coordinate methods, 100k | 1464.00 ms | 469.62 ms | 0.32x | slower |
-| count_coverage, 100k x 100 bp | 135.86 ms | 1038.62 ms | 7.64x | faster |
+| SAM parse + fields, 100k | 328.25 ms | 119.65 ms | 0.36x | slower |
+| BAM parse + fields, 100k | 383.10 ms | 106.13 ms | 0.28x | slower |
+| CIGAR coordinate methods, 100k | 833.83 ms | 379.04 ms | 0.45x | slower |
+| count_coverage, 100k x 100 bp | 180.59 ms | 1035.49 ms | 5.73x | faster |
 
 The base-coverage kernel wins because it traverses packed BAM sequence and
 CIGAR data in one Mojo call. Object-oriented field and CIGAR access is slower
 than pysam: pysam's mature Cython/htslib objects avoid the Python property and
 `ctypes` costs this compatibility layer pays.
 
-No GPU path is provided. The implementation is CPU-only.
+No GPU path is provided. Parsing, packed-CIGAR traversal, and coverage are
+memory-bound integer kernels with well under two arithmetic operations per byte
+moved. Host/device transfers would dominate, so the implementation remains
+CPU-only. Parallel BAM field decoding was also benchmarked with a 4,096-record
+threshold, but its extra boundary pass and synchronization made the end-to-end
+case slower; the serial scanner is retained.
 
 ## How it works
 
@@ -110,9 +115,12 @@ The Python layer reads SAM bytes directly or decompresses BGZF/BAM with the
 standard library. One Mojo scan uses SIMD delimiter search with a scalar tail
 and fills a contiguous `int64` record table with field offsets, fixed BAM core
 values, and CIGAR summaries. `AlignedSegment` objects retain the immutable
-source bytes and decode variable-length names, sequences, qualities, CIGARs,
-and tags lazily. Coordinate and query-length properties consume the native
-summaries directly without reconstructing CIGAR or sequence objects.
+source bytes and lightweight memoryview slices of the shared native row table,
+avoiding a NumPy row-view allocation for every record traversal. Variable-length
+names, sequences, qualities, CIGARs, and tags are decoded lazily. BAM CIGAR words
+are unpacked directly from the source buffer without an intermediate byte copy.
+Coordinate and query-length properties consume the native summaries directly
+without reconstructing CIGAR or sequence objects.
 
 Buffers cross the C ABI as integer addresses. Exported Mojo functions rebuild
 typed `UnsafePointer` values using `AnyOrigin[mut=True]`; Python owns every
